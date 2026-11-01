@@ -1,0 +1,10 @@
+.venv/
+.ruff_cache/
+__pycache__/
+logs/
+demo/out/
+demo/drops/
+demo/vpointer/vpointer
+icons/preview.svg
+# The prototypes carry real file names from the owner's home folder.
+prototypes/

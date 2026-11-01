@@ -1,0 +1,32 @@
+[project]
+name = "ariadne"
+version = "0.1.0"
+description = "Semantic file index: search files by meaning, find look-alikes, route new files into your own folders"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "triton-rocm==3.6.0",
+    "transformers>=5.2",
+    "pillow>=11",
+    "numpy>=2",
+    "watchdog>=6",
+    "typesafe-sdk>=0.7.5",
+]
+
+[project.scripts]
+ariadne = "ariadne.cli:main"
+
+[tool.uv.sources]
+torch = { index = "pytorch-rocm" }
+torchvision = { index = "pytorch-rocm" }
+triton-rocm = { index = "pytorch-rocm" }
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.0"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
