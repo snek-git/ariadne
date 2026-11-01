@@ -1,0 +1,8 @@
+[submodule "cosmic-files"]
+	path = cosmic-files
+	url = https://github.com/snek-git/cosmic-files.git
+	branch = ariadne
+[submodule "portal"]
+	path = portal
+	url = https://github.com/snek-git/xdg-desktop-portal-cosmic.git
+	branch = ariadne
