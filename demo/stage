@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Headless sway stage for recording: `stage up` starts it and prints its WAYLAND_DISPLAY,
+# `stage run CMD...` runs a command inside it, `stage down` stops it.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+state="${XDG_RUNTIME_DIR}/ariadne-stage"
+
+case "${1:-}" in
+  up)
+    before=$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' || true)
+    systemd-run --user --collect --unit=ariadne-stage \
+      -E WLR_BACKENDS=headless -E WLR_HEADLESS_OUTPUTS=1 -E WLR_LIBINPUT_NO_DEVICES=1 \
+      -E XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -E SWAYSOCK="$XDG_RUNTIME_DIR/ariadne-stage.sock" \
+      sway -c "$here/sway.conf"
+    for _ in $(seq 50); do
+      after=$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' || true)
+      new=$(comm -13 <(echo "$before" | sort) <(echo "$after" | sort) | head -1)
+      if [ -n "$new" ]; then echo "$new" > "$state"; echo "$new"; exit 0; fi
+      sleep 0.2
+    done
+    echo "stage: sway did not come up (journalctl --user -u ariadne-stage)" >&2
+    exit 1
+    ;;
+  run)
+    shift
+    WAYLAND_DISPLAY=$(cat "$state") SWAYSOCK="$XDG_RUNTIME_DIR/ariadne-stage.sock" exec "$@"
+    ;;
+  down)
+    systemctl --user stop ariadne-stage
+    rm -f "$state"
+    ;;
+  *)
+    echo "usage: stage up|run CMD...|down" >&2
+    exit 2
+    ;;
+esac
