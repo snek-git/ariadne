@@ -34,6 +34,18 @@ ariadne down
 cosmic-files/target/release/cosmic-files
 ```
 
+## As the desktop's file manager
+
+- **Folders:** `cosmic-files` is the `inode/directory` default.
+- **Show in folder:** `cosmic-files --file-manager1` owns `org.freedesktop.FileManager1` on the
+  session bus. Browsers and editors call it, and it opens a window per call, with the file
+  selected. It is started on demand through a D-Bus service file and the user unit
+  `ariadne-file-manager1.service`.
+- **File picker:** `portal/` is xdg-desktop-portal-cosmic built against the fork, so its open
+  and save dialogs are this window. Its `.portal` file offers FileChooser only, and
+  `hyprland-portals.conf` pins it. GTK apps reach it with `GTK_USE_PORTAL=1` (GTK 3) and
+  `GDK_DEBUG=portals` (GTK 4), Firefox with `widget.use-xdg-desktop-portal.file-picker=1`.
+
 ## Drop zone
 
 A file that lands at the top of a drop zone (`~/Downloads`, `~/Downloads/Telegram Desktop`,
