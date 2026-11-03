@@ -87,7 +87,7 @@ def main():
     a = sub.add_parser("accept", help="move a dropped file where it was suggested (default: the newest)")
     a.add_argument("path", nargs="?")
     a.add_argument("--to", help="a different folder than the suggestion")
-    sub.add_parser("undo", help="put the last accepted move back")
+    sub.add_parser("undo", help="put the last move back (a whole Organize batch at once)")
     e = sub.add_parser("eval", help="holdout test of routing on your sorted folders")
     e.add_argument("--jev", action="store_true", help="also let Jev decide where the vote is unsure (calls the TypeSafe API)")
     o = ap.parse_args()
@@ -137,8 +137,11 @@ def main():
         res = call("/accept", {"path": path, "folder": os.path.abspath(o.to) if o.to else None})
         print(f"moved {short(res['from'])} -> {short(res['to'])}  (ariadne undo puts it back)")
     elif o.cmd == "undo":
-        res = call("/undo", {})["undone"]
-        print(f"put back {short(res['from'])}" if res else "nothing to undo")
+        res = call("/undo", {})
+        if res["count"] == 1:
+            print(f"put back {short(res['undone'][0]['from'])}")
+        else:
+            print(f"put back {res['count']} files" if res["count"] else "nothing to undo")
     elif o.cmd == "eval":
         from .evaluate import run, run_jev
         from .store import Store

@@ -1,6 +1,7 @@
 // A virtual pointer that stays plugged in, for driving a headless sway. wlrctl makes a new
 // device per command, so apps never bind wl_pointer before it is gone again.
-// stdin: "move X Y" (absolute pixels on the output), "click left|right", "quit".
+// stdin: "move X Y" (absolute pixels on the output), "click left|right", "scroll DY" (wheel,
+// positive is down), "quit".
 #include <linux/input-event-codes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +65,10 @@ int main(int argc, char **argv) {
             zwlr_virtual_pointer_v1_frame(p);
             wl_display_roundtrip(display);
             zwlr_virtual_pointer_v1_button(p, now(), b, WL_POINTER_BUTTON_STATE_RELEASED);
+            zwlr_virtual_pointer_v1_frame(p);
+        } else if (sscanf(line, "scroll %d", &y) == 1) {
+            zwlr_virtual_pointer_v1_axis_source(p, WL_POINTER_AXIS_SOURCE_WHEEL);
+            zwlr_virtual_pointer_v1_axis(p, now(), WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_int(y));
             zwlr_virtual_pointer_v1_frame(p);
         } else if (strncmp(line, "quit", 4) == 0) {
             break;

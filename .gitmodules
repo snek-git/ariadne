@@ -6,3 +6,7 @@
 	path = portal
 	url = https://github.com/snek-git/xdg-desktop-portal-cosmic.git
 	branch = ariadne
+[submodule "libcosmic"]
+	path = libcosmic
+	url = https://github.com/snek-git/libcosmic.git
+	branch = ariadne

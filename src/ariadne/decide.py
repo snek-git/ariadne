@@ -7,13 +7,14 @@ it, and a Noul for whether any of them fits at all. Jev returns probabilities, s
 probability of its pick is the confidence and the Noul says when a new folder is the better answer.
 """
 import os
+import time
 from collections import defaultdict
 from pathlib import Path
 
 from typesafe_sdk import Choice, Noul, RetryPolicy, TypeSafeClient, TypeSafeError
 
 from . import config
-from .extract import ext, name_text
+from .extract import ext, family, generic, name_text
 
 SHORTLIST = 5
 VOTE_SURE = 0.9
@@ -22,7 +23,13 @@ NONE_FITS = 0.3  # Noul below this: no shortlisted folder fits
 # Auto-move only above these. Holdout: vote >= 0.9 was right 97.5% of the time (69% of files);
 # Jev >= 0.7 was right 89% of the time on the files the vote was unsure of.
 AUTO_JEV = 0.7
+MEMO = 3600  # seconds Jev's answer for a file over one shortlist is reused
 AUTO_FITS = 0.7
+# A name-only file (an archive, say) is never sure when its nearest filed file is weaker than this.
+# Leave-one-out over 1947 name-only files: every sure move below 0.70 was wrong; 0.75 drops 7 wrong
+# sure moves for 4 right ones.
+NAME_FLOOR = 0.75
+TYPED = 0.8  # a folder sorted by type: this share of the files directly in it have one extension
 KEY_FILE = Path.home() / ".config/typesafe/api_key"
 
 
@@ -97,6 +104,7 @@ class Decider:
         if not key:
             raise RuntimeError(f"no TypeSafe key: set TYPESAFE_API_KEY or write it to {KEY_FILE}")
         self.client = TypeSafeClient(api_key=key, retry=RetryPolicy(max_retries=3, backoff_max=4.0, timeout=20.0))
+        self.memo: dict[tuple, tuple[float, dict]] = {}  # (file, size, mtime, shortlist) -> (when, Jev's answer)
 
     def ask(self, file: dict, folders: list[str], names: dict[str, list[str]]) -> dict:
         """One Jev request: which shortlisted folder, and does any fit."""
@@ -140,16 +148,50 @@ class Decider:
             file["size"] = f"{p.stat().st_size / 1024:.0f} KB"
         if text:
             file["start of its text"] = text
+        folders = [r["folder"] for r in route[:SHORTLIST]]
+        # Jev answers a little differently each time. The same file over the same shortlist gets its
+        # first answer again for MEMO seconds, so a Move and its Undo give back the same plan.
+        st = p.stat() if p.exists() else None
+        key = (path, st and st.st_size, st and st.st_mtime, tuple(folders))
+        hit = self.memo.get(key)
+        if hit and time.time() - hit[0] < MEMO:
+            return hit[1]
         try:
-            return self.ask(file, [r["folder"] for r in route[:SHORTLIST]], names)
+            d = self.ask(file, folders, names)
+            self.memo[key] = (time.time(), d)
+            return d
         except TypeSafeError as err:  # offline or rate limited: the vote still answers
             print(f"jev failed for {p.name}: {err}", flush=True)
             return {"folder": top["folder"], "share": top["share"], "by": "vote", "jev_error": str(err)}
 
 
+def grounds(path: str, folder: str, filed: list[str]) -> dict:
+    """What the file's name and type say about the picked folder: is the name generic, does anything
+    filed under the folder share the type family, and is it a folder sorted by type (most files
+    directly in it share one family)."""
+    e = family(Path(path))
+    inside = [p for p in filed if p.startswith(folder + "/")]
+    direct = [p for p in inside if str(Path(p).parent) == folder]
+    return {"generic": generic(Path(path)), "held": any(family(Path(p)) == e for p in inside),
+            "typed": bool(direct) and sum(family(Path(p)) == e for p in direct) / len(direct) >= TYPED}
+
+
+def groundless(d: dict) -> str | None:
+    """Why the picked folder is no real guess, or None. Leave-one-out: no sure move into a folder
+    without the file's type was right (5 wrong, 0 right), and a generic name only finds files whose
+    names are just as empty ('1.stl' voted with 'piece_001.stl' in ten unrelated subfolders)."""
+    if not d.get("held", True):
+        return "no folder like it holds this type of file"
+    if d.get("named") and d.get("generic") and not d.get("typed"):
+        return "its name says nothing about it"
+    return None
+
+
 def confident(d: dict) -> bool:
     """Sure enough to move the file without asking (you still get an Undo button)."""
-    if not Path(d["folder"]).is_dir():
+    if not Path(d["folder"]).is_dir() or groundless(d):
+        return False
+    if d.get("named") and d.get("top", 1.0) < NAME_FLOOR:
         return False
     if d["by"] == "vote":
         return d["share"] >= VOTE_SURE

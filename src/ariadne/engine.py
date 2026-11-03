@@ -48,11 +48,9 @@ def search(store: Store, q: np.ndarray, n: int = 20, under: str | None = None) -
     return out
 
 
-def similar(store: Store, path: str, n: int = 12) -> list[dict]:
+def similar(store: Store, v: np.ndarray, path: str, n: int = 12) -> list[dict]:
+    """Indexed files nearest to the vector v of the file at path (which need not be indexed)."""
     m = store.mem()
-    v = store.file_vec(path)
-    if v is None:
-        return []
     s = m["vecs"] @ v
     out = []
     for i in np.argsort(-s):
@@ -109,19 +107,50 @@ def vote(sims: np.ndarray, folders: list[str], k: int = K, majority: float = MAJ
     total = sum(exact.values()) or 1.0
     held = [f for f, v in tree.items() if v / total >= majority]
     best = max(held, key=lambda f: (len(Path(f).parts), tree[f])) if held else max(exact, key=exact.get)
-    out = [{"folder": best, "share": round(tree[best] / total, 3)}]
+    # `top` is the nearest file's similarity: a vote of weak neighbours can still be unanimous
+    out = [{"folder": best, "share": round(tree[best] / total, 3), "top": round(float(sims[top[0]]), 4)}]
     for f, v in sorted(exact.items(), key=lambda kv: -kv[1]):
         if f != best:
             out.append({"folder": f, "share": round(v / total, 3)})
     return out
 
 
-def route(store: Store, v: np.ndarray, exclude: str | None = None, k: int = K) -> list[dict]:
+def prepared(store: Store) -> dict:
+    """The index in memory, plus what routing needs from it worked out once: which files are filed,
+    their folders and where each path sits. mem() is rebuilt after every write, so these never go
+    stale. An Organize plan routes hundreds of files; redoing this per file cost 60 ms each."""
     m = store.mem()
-    mask = labeled(m["paths"])
-    if exclude:
-        mask &= np.array([p != exclude for p in m["paths"]], dtype=bool)
+    if "labeled" not in m:
+        m["parents"] = [str(Path(p).parent) for p in m["paths"]]
+        m["at"] = {p: i for i, p in enumerate(m["paths"])}
+        m["labeled"] = labeled(m["paths"])
+        m["filed"] = [p for p, ok in zip(m["paths"], m["labeled"]) if ok]
+        piles = {str(p) for p in config.PILES}
+        m["piled"] = np.array([f in piles for f in m["parents"]], dtype=bool)
+        zones = tuple(str(z) for z in config.DROP_ZONES)
+        m["dropped"] = np.array([f.startswith(zones) for f in m["parents"]], dtype=bool)
+    return m
+
+
+def route(store: Store, v: np.ndarray, exclude: str | None = None, k: int = K, homes: bool = False,
+          planned: dict[str, str] | None = None) -> list[dict]:
+    """The vote over filed files. `homes` leaves the Downloads piles out: an Organize plan looks for
+    where a file lives, and a pile sorted by type is no home. `planned` votes as if these files
+    (path -> folder) were already moved there, among your own folders only: nothing in Downloads
+    or on the Desktop votes, as a plan never proposes a folder there."""
+    m = prepared(store)
+    mask = m["labeled"].copy()
+    if homes:
+        mask &= ~m["piled"]
+    if planned:
+        mask &= ~m["dropped"]
+    planned = planned or {}
+    for p in planned:
+        if p in m["at"]:
+            mask[m["at"][p]] = True
+    if exclude in m["at"]:
+        mask[m["at"][exclude]] = False
     idx = np.flatnonzero(mask)
     sims = m["vecs"][idx] @ v
-    folders = [str(Path(m["paths"][i]).parent) for i in idx]
+    folders = [planned.get(m["paths"][i]) or m["parents"][i] for i in idx] if planned else [m["parents"][i] for i in idx]
     return vote(sims, folders, k)

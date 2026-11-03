@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 from . import config
 
 RECENT = 24 * 3600  # how long a file moved on its own stays in the Inbox
+QUIET = 30 * 24 * 3600  # how long a file you unticked in an Organize plan stays off that folder
 ORIGIN = "user.xdg.origin.url"  # set by browsers on downloaded files
 LOG_LOCK = threading.Lock()
 
@@ -28,9 +29,10 @@ class Inbox:
         with self.lock:
             self.version += 1
 
-    def suggest(self, path: str, route: list[dict], decision: dict, dup_of: str | None) -> None:
+    def suggest(self, path: str, route: list[dict], decision: dict, dup_of: str | None,
+                at: float | None = None) -> None:
         with self.lock:
-            self.pending[path] = {"path": path, "route": route[:5], "decision": decision, "at": time.time(),
+            self.pending[path] = {"path": path, "route": route[:5], "decision": decision, "at": at or time.time(),
                                   "source": source(path), "dup_of": dup_of}
             self.version += 1
 
@@ -95,6 +97,95 @@ def log() -> list[dict]:
     return [{**json.loads(line), "id": i} for i, line in enumerate(lines, 1)]
 
 
+def kept() -> set[str]:
+    """Drop zone files you chose Keep here on, so a restart does not ask about them again."""
+    try:
+        return set(json.loads(config.KEPT.read_text()))
+    except (OSError, ValueError):
+        return set()
+
+
+def keep(path: str) -> None:
+    config.KEPT.parent.mkdir(parents=True, exist_ok=True)
+    config.KEPT.write_text(json.dumps(sorted(kept() | {path})))
+
+
+def rejected() -> dict[str, dict[str, float]]:
+    """File -> folder -> when you unticked it in an Organize plan, for the last QUIET seconds: the
+    plan does not propose that folder for that file again meanwhile."""
+    try:
+        st = json.loads(config.REJECTED.read_text())
+    except (OSError, ValueError):
+        return {}
+    now = time.time()
+    live = {p: {f: t for f, t in fs.items() if now - t < QUIET} for p, fs in st.items()}
+    return {p: fs for p, fs in live.items() if fs}
+
+
+def reject(pairs: list[tuple[str, str]]) -> None:
+    if not pairs:
+        return
+    st, now = rejected(), time.time()
+    for path, folder in pairs:
+        st.setdefault(path, {})[folder] = now
+    config.REJECTED.parent.mkdir(parents=True, exist_ok=True)
+    config.REJECTED.write_text(json.dumps(st, indent=1))
+
+
+def renamed() -> dict[str, str]:
+    """Folder an Organize plan proposed -> the name you gave it instead, so later plans use yours."""
+    try:
+        return json.loads(config.RENAMED.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def rename(pairs: dict[str, str]) -> None:
+    if pairs:
+        config.RENAMED.parent.mkdir(parents=True, exist_ok=True)
+        config.RENAMED.write_text(json.dumps({**renamed(), **pairs}, indent=1))
+
+
+def _batches() -> dict[str, dict]:
+    try:
+        return json.loads(config.BATCHES.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def remember(batch: str, made: list[str], declined: list[tuple[str, str]], renames: dict[str, str]) -> None:
+    """What an Organize did besides moving files: the folders it made, the noes and the renames."""
+    st = _batches()
+    st[batch] = {"made": made, "declined": declined, "renamed": renames}
+    config.BATCHES.parent.mkdir(parents=True, exist_ok=True)
+    config.BATCHES.write_text(json.dumps(st, indent=1))
+
+
+def forget(batch: str) -> list[str]:
+    """Take back an Organize's noes and renames; returns the folders it made, for the caller to
+    remove when they are empty again."""
+    st = _batches()
+    b = st.pop(batch, None)
+    if b is None:
+        return []
+    no = rejected()
+    for path, folder in b["declined"]:
+        no.get(path, {}).pop(folder, None)
+    config.REJECTED.write_text(json.dumps({p: fs for p, fs in no.items() if fs}, indent=1))
+    names = renamed()
+    for proposed, folder in b["renamed"].items():
+        if names.get(proposed) == folder:
+            del names[proposed]
+    config.RENAMED.write_text(json.dumps(names, indent=1))
+    config.BATCHES.write_text(json.dumps(st, indent=1))
+    return b["made"]
+
+
+def returned() -> set[str]:
+    """Paths an undo put a file back at."""
+    return {m["from"] for m in log() if m.get("undone")}
+
+
 def thread(limit: int = 40) -> list[dict]:
     """The undo thread: moves not undone whose file is still where they put it, oldest first."""
     live = [m for m in log() if not m.get("undone") and Path(m["to"]).exists()][-limit:]
@@ -133,11 +224,10 @@ def move(src: str, dst: str, **entry) -> dict:
 
 
 def undo_target(moved_to: str | None = None) -> dict | None:
-    """The move undo() would put back: the one that put a file at moved_to, else ariadne's newest."""
+    """The move undo() would put back: the one that put a file at moved_to, else the newest move of
+    any kind (ariadne's, yours, or the last of an Organize batch)."""
     for m in reversed(log()):
-        if m.get("undone"):
-            continue
-        if (m["to"] == moved_to) if moved_to else m.get("by") != "you":
+        if not m.get("undone") and (moved_to is None or m["to"] == moved_to):
             return m
     return None
 

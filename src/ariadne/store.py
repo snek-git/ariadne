@@ -35,6 +35,7 @@ class Store:
         self.db.executescript(SCHEMA)
         self.lock = threading.RLock()
         self._mem = None
+        self.changes = 0  # goes up on every write, so a cached decision knows the index moved on
 
     def known(self) -> dict[str, tuple[int, float]]:
         with self.lock:
@@ -49,12 +50,14 @@ class Store:
             self.db.executemany("insert into parts values (?, ?, ?, ?, ?)",
                                 [(fid, i, k, t, blob(v)) for i, (k, t, v) in enumerate(parts)])
             self._mem = None
+            self.changes += 1
 
     def remove(self, path: str) -> None:
         with self.lock, self.db:
             under = path.rstrip("/").replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "/%"
             self.db.execute(r"delete from files where path = ? or path like ? escape '\'", (path, under))
             self._mem = None
+            self.changes += 1
 
     def rename(self, old: str, new: str) -> None:
         """A moved file or folder keeps its vectors: nothing to re-embed. Renaming something the
@@ -68,6 +71,7 @@ class Store:
             self.db.execute(r"update files set path = ? || substr(path, ?) where path like ? escape '\'",
                             (new.rstrip("/") + "/", len(pre) + 1, under))
             self._mem = None
+            self.changes += 1
 
     def mem(self) -> dict:
         """Everything search needs, as arrays; rebuilt after a write."""
@@ -110,6 +114,11 @@ class Store:
         with self.lock:
             r = self.db.execute("select vec from files where path = ?", (path,)).fetchone()
             return unblob(r[0]).astype(np.float32) if r else None
+
+    def kind(self, path: str) -> str | None:
+        with self.lock:
+            r = self.db.execute("select kind from files where path = ?", (path,)).fetchone()
+            return r[0] if r else None
 
     def count(self) -> dict:
         with self.lock:
